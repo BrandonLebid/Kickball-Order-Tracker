@@ -1,8 +1,6 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<html lang="en"><head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Kickball Order Tracker</title>
   <style>
     :root {
@@ -126,16 +124,17 @@
     <h1>Kickball Order Tracker</h1>
     <div class="toolbar">
       <button id="copyLinkBtn" type="button">Copy Link</button>
-      <button id="toEditBtn" type="button" hidden>Switch to Edit Mode</button>
-      <button id="toPlayBtn" type="button">Switch to Play Mode</button>
+      <button id="toEditBtn" type="button" hidden="">Switch to Edit Mode</button>
+      <button id="toPlayBtn" type="button" disabled="">Switch to Play Mode</button>
       <button id="autoOrganizeBtn" type="button">Auto Organize</button>
-      <button id="prevBtn" type="button" hidden>Previous</button>
-      <button id="nextBtn" type="button" hidden>Next</button>
-      <span class="mode-pill" id="modePill"></span>
+      <button id="prevBtn" type="button" hidden="">Previous</button>
+      <button id="nextBtn" type="button" hidden="">Next</button>
+      <span class="mode-pill" id="modePill">Mode: Edit</span>
     </div>
-    <div id="errorMessage" class="error" role="alert"></div>
+    <div id="errorMessage" class="error" role="alert">At least one girl must have a name. All-empty girl slots are not allowed.
+All boy slots must have a name.</div>
     <div id="statusMessage" class="good" aria-live="polite"></div>
-    <div id="content"></div>
+    <div id="content"><div class="slot-list"><div class="slot-row" draggable="true" data-id="sonsjncs"><span class="drag-handle" title="Drag to reorder">⋮⋮</span><input type="checkbox" title="Check for girl slot"><input class="name-input" type="text" placeholder="Girl name (or empty for empty girl slot)"><span class="slot-tag">Empty girl slot (rotates)</span><button type="button" title="Remove slot">−</button></div><div class="slot-row" draggable="true" data-id="kny1pcd8"><span class="drag-handle" title="Drag to reorder">⋮⋮</span><input type="checkbox" title="Check for girl slot"><input class="name-input" type="text" placeholder="Boy name"><span class="slot-tag">Boy slot</span><button type="button" title="Remove slot">−</button></div><div class="slot-row" draggable="true" data-id="5nttxf4n"><span class="drag-handle" title="Drag to reorder">⋮⋮</span><input type="checkbox" title="Check for girl slot"><input class="name-input" type="text" placeholder="Girl name (or empty for empty girl slot)"><span class="slot-tag">Empty girl slot (rotates)</span><button type="button" title="Remove slot">−</button></div><div class="slot-row" draggable="true" data-id="uxmyjfq6"><span class="drag-handle" title="Drag to reorder">⋮⋮</span><input type="checkbox" title="Check for girl slot"><input class="name-input" type="text" placeholder="Boy name"><span class="slot-tag">Boy slot</span><button type="button" title="Remove slot">−</button></div></div><button type="button">+ Add Slot</button><div class="hint">Tip: drag rows to reorder. Checkbox = girl slot, unchecked = boy slot.</div></div>
   </div>
   <script>
     /** @typedef {{id:string,name:string,gender:"boy"|"girl"}} Slot */
@@ -264,13 +263,17 @@
       if (slot.gender === "boy") return slot.name.trim();
       const girls = computedGirlNames();
       if (girls.length === 0) return "(No named girl)";
+      const hasEmptyGirlSlot = state.slots.some((s) => s.gender === "girl" && s.name.trim().length === 0);
+      // No empty slots — every named girl stays in her own fixed position
+      if (!hasEmptyGirlSlot) return slot.name.trim();
+      // Has empty slots — all girl slot positions rotate through the named girls array
       let girlSlotPosition = 0;
       for (let i = 0; i < slotIndex; i += 1) {
         if (state.slots[i].gender === "girl") {
           girlSlotPosition += 1;
         }
       }
-      const idx = mod(state.roundIndex + girlSlotPosition, girls.length);
+      const idx = mod(girlSlotPosition + state.roundIndex, girls.length);
       return girls[idx];
     }
 
@@ -623,5 +626,5 @@
     clampPlayIndex();
     render();
   </script>
-</body>
-</html>
+
+</body></html>
