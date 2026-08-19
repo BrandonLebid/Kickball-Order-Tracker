@@ -1,0 +1,627 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Kickball Order Tracker</title>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: #f6f7fb;
+      --panel: #ffffff;
+      --text: #16181d;
+      --muted: #6a7280;
+      --error: #b3261e;
+      --ok: #1b7f3b;
+      --border: #d6dbe5;
+      --accent: #2d6cdf;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #12141a;
+        --panel: #1c2028;
+        --text: #eef2f9;
+        --muted: #a6adbb;
+        --error: #ff8f8a;
+        --ok: #88d8a0;
+        --border: #3b4557;
+        --accent: #7cabff;
+      }
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      padding: 20px;
+    }
+    .container {
+      max-width: 900px;
+      margin: 0 auto;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 16px;
+    }
+    h1 { margin-top: 0; font-size: 1.4rem; }
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-bottom: 12px;
+      align-items: center;
+    }
+    button {
+      border: 1px solid var(--border);
+      background: var(--panel);
+      color: var(--text);
+      padding: 8px 12px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-size: 0.95rem;
+    }
+    button:hover:not(:disabled) { border-color: var(--accent); }
+    button:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+    }
+    .mode-pill {
+      margin-left: auto;
+      font-weight: 600;
+      color: var(--muted);
+    }
+    .error { color: var(--error); margin: 8px 0; white-space: pre-line; }
+    .good { color: var(--ok); margin: 8px 0; }
+    .slot-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-top: 8px;
+    }
+    .slot-row {
+      display: grid;
+      grid-template-columns: auto auto 1fr auto auto;
+      gap: 10px;
+      align-items: center;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px;
+      background: transparent;
+    }
+    .slot-row.dragging { opacity: 0.6; }
+    .drag-handle {
+      cursor: grab;
+      user-select: none;
+      color: var(--muted);
+      font-size: 1.1rem;
+    }
+    .name-input {
+      width: 100%;
+      min-width: 120px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 7px 8px;
+      background: transparent;
+      color: var(--text);
+    }
+    .slot-tag {
+      color: var(--muted);
+      font-size: 0.88rem;
+      min-width: 90px;
+    }
+    .hint {
+      color: var(--muted);
+      font-size: 0.88rem;
+    }
+    .play-list .slot-row.current {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
+    }
+    .play-name { font-weight: 600; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Kickball Order Tracker</h1>
+    <div class="toolbar">
+      <button id="copyLinkBtn" type="button">Copy Link</button>
+      <button id="toEditBtn" type="button" hidden>Switch to Edit Mode</button>
+      <button id="toPlayBtn" type="button">Switch to Play Mode</button>
+      <button id="autoOrganizeBtn" type="button">Auto Organize</button>
+      <button id="prevBtn" type="button" hidden>Previous</button>
+      <button id="nextBtn" type="button" hidden>Next</button>
+      <span class="mode-pill" id="modePill"></span>
+    </div>
+    <div id="errorMessage" class="error" role="alert"></div>
+    <div id="statusMessage" class="good" aria-live="polite"></div>
+    <div id="content"></div>
+  </div>
+  <script>
+    /** @typedef {{id:string,name:string,gender:"boy"|"girl"}} Slot */
+    /** @typedef {{slots:Slot[], roundIndex:number, currentBatterIndex:number}} AppState */
+
+    const contentEl = document.getElementById("content");
+    const errorEl = document.getElementById("errorMessage");
+    const statusEl = document.getElementById("statusMessage");
+    const modePillEl = document.getElementById("modePill");
+    const copyLinkBtn = document.getElementById("copyLinkBtn");
+    const toEditBtn = document.getElementById("toEditBtn");
+    const toPlayBtn = document.getElementById("toPlayBtn");
+    const autoOrganizeBtn = document.getElementById("autoOrganizeBtn");
+    const prevBtn = document.getElementById("prevBtn");
+    const nextBtn = document.getElementById("nextBtn");
+
+    /** @type {"edit"|"play"} */
+    let mode = "edit";
+
+    /** @type {AppState} */
+    let state = loadStateFromQuery() || {
+      slots: [
+        { id: uid(), name: "", gender: "girl" },
+        { id: uid(), name: "", gender: "boy" },
+        { id: uid(), name: "", gender: "girl" },
+        { id: uid(), name: "", gender: "boy" }
+      ],
+      roundIndex: 0,
+      currentBatterIndex: 0
+    };
+
+    let dragSourceId = null;
+
+    function uid() {
+      return Math.random().toString(36).slice(2, 10);
+    }
+
+    function encodeState(payload) {
+      const json = JSON.stringify(payload);
+      return btoa(unescape(encodeURIComponent(json)));
+    }
+
+    function decodeState(raw) {
+      try {
+        const json = decodeURIComponent(escape(atob(raw)));
+        return JSON.parse(json);
+      } catch {
+        return null;
+      }
+    }
+
+    function loadStateFromQuery() {
+      const params = new URLSearchParams(location.search);
+      const data = params.get("d");
+      if (!data) return null;
+      const parsed = decodeState(data);
+      if (!parsed || !Array.isArray(parsed.slots)) return null;
+      const cleanSlots = parsed.slots
+        .map((s) => ({
+          id: typeof s.id === "string" && s.id ? s.id : uid(),
+          name: typeof s.name === "string" ? s.name : "",
+          gender: s.gender === "girl" ? "girl" : "boy"
+        }));
+      return {
+        slots: cleanSlots,
+        roundIndex: Number.isInteger(parsed.roundIndex) ? parsed.roundIndex : 0,
+        currentBatterIndex: Number.isInteger(parsed.currentBatterIndex) ? parsed.currentBatterIndex : 0
+      };
+    }
+
+    function persistUrl() {
+      const payload = {
+        slots: state.slots.map((s) => ({ id: s.id, name: s.name, gender: s.gender })),
+        roundIndex: state.roundIndex,
+        currentBatterIndex: state.currentBatterIndex
+      };
+      const params = new URLSearchParams(location.search);
+      params.set("d", encodeState(payload));
+      const next = `${location.pathname}?${params.toString()}`;
+      history.replaceState(null, "", next);
+    }
+
+    function summarizeValidation() {
+      const errors = [];
+      if (state.slots.length === 0) {
+        errors.push("Add at least one slot.");
+      }
+      const girls = state.slots.filter((s) => s.gender === "girl");
+      const namedGirls = girls.filter((s) => s.name.trim().length > 0);
+      if (girls.length > 0 && namedGirls.length === 0) {
+        errors.push("At least one girl must have a name. All-empty girl slots are not allowed.");
+      }
+      const emptyBoys = state.slots.filter((s) => s.gender === "boy" && s.name.trim().length === 0);
+      if (emptyBoys.length > 0) {
+        errors.push("All boy slots must have a name.");
+      }
+      if (!isNoThreeInRowCircular(state.slots)) {
+        errors.push("Order invalid: cannot have 3 girls or 3 boys in a row.");
+      }
+      return {
+        errors,
+        canPlay: errors.length === 0
+      };
+    }
+
+    function isNoThreeInRowCircular(slots) {
+      const n = slots.length;
+      if (n < 3) return true;
+      for (let i = 0; i < n; i += 1) {
+        const g1 = slots[i].gender;
+        const g2 = slots[(i + 1) % n].gender;
+        const g3 = slots[(i + 2) % n].gender;
+        if (g1 === g2 && g2 === g3) return false;
+      }
+      return true;
+    }
+
+    function computedGirlNames() {
+      return state.slots
+        .filter((s) => s.gender === "girl" && s.name.trim().length > 0)
+        .map((s) => s.name.trim());
+    }
+
+    function displayNameForPlay(slotIndex) {
+      const slot = state.slots[slotIndex];
+      if (slot.gender === "boy") return slot.name.trim();
+      const girls = computedGirlNames();
+      if (girls.length === 0) return "(No named girl)";
+      let girlSlotPosition = 0;
+      for (let i = 0; i < slotIndex; i += 1) {
+        if (state.slots[i].gender === "girl") {
+          girlSlotPosition += 1;
+        }
+      }
+      const idx = mod(state.roundIndex + girlSlotPosition, girls.length);
+      return girls[idx];
+    }
+
+    function mod(n, m) {
+      return ((n % m) + m) % m;
+    }
+
+    function clampPlayIndex() {
+      if (state.slots.length === 0) {
+        state.currentBatterIndex = 0;
+        return;
+      }
+      state.currentBatterIndex = mod(state.currentBatterIndex, state.slots.length);
+    }
+
+    function updateValidationUiAndUrl() {
+      const validation = summarizeValidation();
+      toPlayBtn.disabled = !validation.canPlay;
+      errorEl.textContent = validation.errors.join("\n");
+      persistUrl();
+      return validation;
+    }
+
+    function render() {
+      const isEdit = mode === "edit";
+
+      toEditBtn.hidden = isEdit;
+      toPlayBtn.hidden = !isEdit;
+      autoOrganizeBtn.hidden = !isEdit;
+      prevBtn.hidden = isEdit;
+      nextBtn.hidden = isEdit;
+      updateValidationUiAndUrl();
+      modePillEl.textContent = isEdit ? "Mode: Edit" : `Mode: Play (Round ${state.roundIndex + 1})`;
+
+      if (isEdit) {
+        renderEdit();
+      } else {
+        renderPlay();
+      }
+    }
+
+    function renderEdit() {
+      const frag = document.createDocumentFragment();
+      const list = document.createElement("div");
+      list.className = "slot-list";
+
+      state.slots.forEach((slot) => {
+        const row = document.createElement("div");
+        row.className = "slot-row";
+        row.draggable = true;
+        row.dataset.id = slot.id;
+
+        row.addEventListener("dragstart", (e) => {
+          dragSourceId = slot.id;
+          row.classList.add("dragging");
+          e.dataTransfer.effectAllowed = "move";
+          e.dataTransfer.setData("text/plain", slot.id);
+        });
+        row.addEventListener("dragend", () => {
+          row.classList.remove("dragging");
+          dragSourceId = null;
+        });
+        row.addEventListener("dragover", (e) => {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "move";
+        });
+        row.addEventListener("drop", (e) => {
+          e.preventDefault();
+          const sourceId = dragSourceId || e.dataTransfer.getData("text/plain");
+          moveSlot(sourceId, slot.id);
+        });
+
+        const handle = document.createElement("span");
+        handle.className = "drag-handle";
+        handle.title = "Drag to reorder";
+        handle.textContent = "⋮⋮";
+
+        const girlCheck = document.createElement("input");
+        girlCheck.type = "checkbox";
+        girlCheck.checked = slot.gender === "girl";
+        girlCheck.title = "Check for girl slot";
+        girlCheck.addEventListener("change", () => {
+          slot.gender = girlCheck.checked ? "girl" : "boy";
+          render();
+        });
+
+        const input = document.createElement("input");
+        input.className = "name-input";
+        input.type = "text";
+        input.placeholder = slot.gender === "girl" ? "Girl name (or empty for empty girl slot)" : "Boy name";
+        input.value = slot.name;
+        input.addEventListener("input", () => {
+          slot.name = input.value;
+          updateValidationUiAndUrl();
+        });
+
+        const tag = document.createElement("span");
+        tag.className = "slot-tag";
+        if (slot.gender === "girl" && slot.name.trim().length === 0) {
+          tag.textContent = "Empty girl slot (rotates)";
+        } else {
+          tag.textContent = slot.gender === "girl" ? "Girl slot" : "Boy slot";
+        }
+
+        const removeBtn = document.createElement("button");
+        removeBtn.type = "button";
+        removeBtn.textContent = "−";
+        removeBtn.title = "Remove slot";
+        removeBtn.addEventListener("click", () => {
+          removeSlot(slot.id);
+        });
+
+        row.append(handle, girlCheck, input, tag, removeBtn);
+        list.appendChild(row);
+      });
+
+      const addBtn = document.createElement("button");
+      addBtn.type = "button";
+      addBtn.textContent = "+ Add Slot";
+      addBtn.addEventListener("click", () => {
+        state.slots.push({ id: uid(), name: "", gender: "boy" });
+        render();
+      });
+
+      const hint = document.createElement("div");
+      hint.className = "hint";
+      hint.textContent = "Tip: drag rows to reorder. Checkbox = girl slot, unchecked = boy slot.";
+
+      frag.append(list, addBtn, hint);
+      contentEl.replaceChildren(frag);
+    }
+
+    function renderPlay() {
+      clampPlayIndex();
+      const list = document.createElement("div");
+      list.className = "slot-list play-list";
+
+      state.slots.forEach((slot, idx) => {
+        const row = document.createElement("div");
+        row.className = `slot-row${idx === state.currentBatterIndex ? " current" : ""}`;
+
+        const index = document.createElement("span");
+        index.textContent = String(idx + 1).padStart(2, "0");
+        const gender = document.createElement("span");
+        gender.textContent = slot.gender === "girl" ? "Girl" : "Boy";
+        const name = document.createElement("span");
+        name.className = "play-name";
+        name.textContent = displayNameForPlay(idx) || "(empty)";
+        const detail = document.createElement("span");
+        detail.className = "slot-tag";
+
+        if (slot.gender === "girl" && slot.name.trim().length === 0) {
+          detail.textContent = "From rotating girl list";
+        } else if (slot.gender === "girl") {
+          detail.textContent = "Girl slot";
+        } else {
+          detail.textContent = "Boy slot";
+        }
+
+        const noop = document.createElement("span");
+        noop.textContent = "";
+        row.append(index, gender, name, detail, noop);
+        list.appendChild(row);
+      });
+
+      contentEl.replaceChildren(list);
+    }
+
+    function removeSlot(slotId) {
+      const idx = state.slots.findIndex((s) => s.id === slotId);
+      if (idx < 0) return;
+      state.slots.splice(idx, 1);
+      if (state.currentBatterIndex >= state.slots.length) {
+        state.currentBatterIndex = Math.max(0, state.slots.length - 1);
+      }
+      render();
+    }
+
+    function moveSlot(sourceId, targetId) {
+      if (!sourceId || !targetId || sourceId === targetId) return;
+      const sourceIdx = state.slots.findIndex((s) => s.id === sourceId);
+      const targetIdx = state.slots.findIndex((s) => s.id === targetId);
+      if (sourceIdx < 0 || targetIdx < 0) return;
+      const [moved] = state.slots.splice(sourceIdx, 1);
+      state.slots.splice(targetIdx, 0, moved);
+      render();
+    }
+
+    function nextPlay() {
+      if (state.slots.length === 0) return;
+      state.currentBatterIndex += 1;
+      if (state.currentBatterIndex >= state.slots.length) {
+        state.currentBatterIndex = 0;
+        state.roundIndex += 1;
+      }
+      render();
+    }
+
+    function prevPlay() {
+      if (state.slots.length === 0) return;
+      state.currentBatterIndex -= 1;
+      if (state.currentBatterIndex < 0) {
+        state.currentBatterIndex = state.slots.length - 1;
+        state.roundIndex -= 1;
+      }
+      render();
+    }
+
+    function autoOrganize() {
+      const girls = state.slots.filter((s) => s.gender === "girl");
+      const boys = state.slots.filter((s) => s.gender === "boy");
+      const pattern = buildCircularPattern(girls.length, boys.length);
+      if (!pattern) {
+        statusEl.textContent = "";
+        errorEl.textContent = "Could not auto-organize into a valid order with current girl/boy counts.";
+        return;
+      }
+
+      let gi = 0;
+      let bi = 0;
+      state.slots = pattern.map((g) => {
+        if (g === "girl") {
+          const slot = girls[gi];
+          gi += 1;
+          return slot;
+        }
+        const slot = boys[bi];
+        bi += 1;
+        return slot;
+      });
+
+      statusEl.textContent = "Auto-organized order.";
+      render();
+    }
+
+    function buildCircularPattern(gCount, bCount) {
+      const memo = new Map();
+      const n = gCount + bCount;
+      if (n === 0) return [];
+
+      function recurse(gLeft, bLeft, built) {
+        const key = `${gLeft}|${bLeft}|${built.slice(-2).join("")}|${built[0] || ""}|${built[1] || ""}`;
+        if (memo.has(key)) return memo.get(key);
+
+        if (gLeft === 0 && bLeft === 0) {
+          const ok = isPatternCircularValid(built);
+          memo.set(key, ok ? built.slice() : null);
+          return ok ? built.slice() : null;
+        }
+
+        const candidates = [];
+        if (gLeft > 0) candidates.push("girl");
+        if (bLeft > 0) candidates.push("boy");
+
+        // Prefer alternating and slight girl spread.
+        candidates.sort((a, b) => scoreChoice(a, built) - scoreChoice(b, built));
+
+        for (const c of candidates) {
+          const len = built.length;
+          if (len >= 2 && built[len - 1] === c && built[len - 2] === c) {
+            continue;
+          }
+          built.push(c);
+          const out = recurse(
+            gLeft - (c === "girl" ? 1 : 0),
+            bLeft - (c === "boy" ? 1 : 0),
+            built
+          );
+          if (out) {
+            memo.set(key, out.slice());
+            built.pop();
+            return out.slice();
+          }
+          built.pop();
+        }
+
+        memo.set(key, null);
+        return null;
+      }
+
+      return recurse(gCount, bCount, []);
+    }
+
+    function scoreChoice(choice, built) {
+      if (built.length === 0) return choice === "girl" ? 0 : 1;
+      const last = built[built.length - 1];
+      if (last !== choice) return 0;
+      return 1;
+    }
+
+    function isPatternCircularValid(pattern) {
+      const n = pattern.length;
+      if (n < 3) return true;
+      for (let i = 0; i < n; i += 1) {
+        const a = pattern[i];
+        const b = pattern[(i + 1) % n];
+        const c = pattern[(i + 2) % n];
+        if (a === b && b === c) return false;
+      }
+      return true;
+    }
+
+    async function copyLink() {
+      persistUrl();
+      const text = location.href;
+      try {
+        await navigator.clipboard.writeText(text);
+        statusEl.textContent = "Link copied.";
+      } catch {
+        const ok = window.prompt("Copy this link:", text);
+        if (ok !== null) statusEl.textContent = "Link ready to copy.";
+      }
+    }
+
+    copyLinkBtn.addEventListener("click", () => {
+      copyLink();
+    });
+
+    toPlayBtn.addEventListener("click", () => {
+      const validation = summarizeValidation();
+      if (!validation.canPlay) {
+        render();
+        return;
+      }
+      mode = "play";
+      statusEl.textContent = "";
+      render();
+    });
+
+    toEditBtn.addEventListener("click", () => {
+      mode = "edit";
+      statusEl.textContent = "";
+      render();
+    });
+
+    nextBtn.addEventListener("click", () => {
+      nextPlay();
+    });
+
+    prevBtn.addEventListener("click", () => {
+      prevPlay();
+    });
+
+    autoOrganizeBtn.addEventListener("click", () => {
+      autoOrganize();
+    });
+
+    // Load from shared links in edit mode, as requested.
+    mode = "edit";
+    clampPlayIndex();
+    render();
+  </script>
+</body>
+</html>
